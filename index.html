@@ -15,29 +15,31 @@
   </style>
 </head>
 <body>
-  <div id="info">Put on your headset &amp; press <b>Enter VR</b>. Point at a panel and pull the trigger.</div>
+  <div id="info">Press <b>Enter VR</b>. Left stick = move, right stick = turn. Point &amp; trigger/pinch the panels.</div>
 
   <script type="importmap">
   {
     "imports": {
       "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+      "cannon-es": "https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js"
     }
   }
   </script>
 
   <script type="module">
     import * as THREE from 'three';
+    import * as CANNON from 'cannon-es';
     import { VRButton } from 'three/addons/webxr/VRButton.js';
     import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
     import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
 
-    // ---- Scene setup ----------------------------------------------------
+    // ---- Renderer / scene / camera -------------------------------------
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x101015);
 
     const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 50);
-    camera.position.set(0, 1.6, 0);
+    camera.position.set(0, 1.6, 0); // default eye height for non-VR preview; XR overrides this
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(devicePixelRatio);
@@ -54,126 +56,255 @@
       renderer.setSize(innerWidth, innerHeight);
     });
 
-    // ---- Lights ---------------------------------------------------------
+    // Player rig: everything that should move when you use the joystick
+    // lives under this group (the camera, the controllers and the hands).
+    const player = new THREE.Group();
+    player.add(camera);
+    scene.add(player);
+
+    // ---- Lights & floor -------------------------------------------------
     scene.add(new THREE.HemisphereLight(0xffffff, 0x444466, 1.1));
     const dir = new THREE.DirectionalLight(0xffffff, 1.2);
     dir.position.set(1, 3, 2);
     scene.add(dir);
 
-    // A floor so you have a sense of grounding
     const floor = new THREE.Mesh(
-      new THREE.CircleGeometry(6, 48).rotateX(-Math.PI / 2),
+      new THREE.CircleGeometry(8, 48).rotateX(-Math.PI / 2),
       new THREE.MeshStandardMaterial({ color: 0x1a1a22, roughness: 1 })
     );
     scene.add(floor);
 
-    // ---- The cube -------------------------------------------------------
+    // ---- Physics world --------------------------------------------------
+    const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) });
+    world.broadphase = new CANNON.SAPBroadphase(world);
+    world.defaultContactMaterial.restitution = 0.25; // a little bounce
+
+    const floorBody = new CANNON.Body({ type: CANNON.Body.STATIC, shape: new CANNON.Plane() });
+    floorBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+    world.addBody(floorBody);
+
+    // ---- Cubes ----------------------------------------------------------
     const palette = [0xff4444, 0x44cc66, 0x4488ff, 0xffcc33, 0xaa55ff, 0xffffff];
     let colorIndex = 0;
 
-    const cube = new THREE.Mesh(
-      new THREE.BoxGeometry(0.4, 0.4, 0.4),
-      new THREE.MeshStandardMaterial({ color: palette[0], roughness: 0.35, metalness: 0.1 })
-    );
-    cube.position.set(0, 1.5, -1.2);
-    scene.add(cube);
+    const SIZE = 0.4, HALF = SIZE / 2;
+    const boxGeo = new THREE.BoxGeometry(SIZE, SIZE, SIZE);
+    const cubes = []; // { mesh, body, dropped }
+
+    function spawnCube(pos) {
+      const mesh = new THREE.Mesh(
+        boxGeo,
+        new THREE.MeshStandardMaterial({ color: palette[colorIndex], roughness: 0.35, metalness: 0.1 })
+      );
+      mesh.position.copy(pos);
+      scene.add(mesh);
+
+      const body = new CANNON.Body({
+        mass: 1,
+        shape: new CANNON.Box(new CANNON.Vec3(HALF, HALF, HALF)),
+        position: new CANNON.Vec3(pos.x, pos.y, pos.z)
+      });
+      body.type = CANNON.Body.STATIC; // frozen / floating until dropped
+      body.sleep();
+      world.addBody(body);
+
+      cubes.push({ mesh, body, dropped: false });
+    }
 
     function setColor(i) {
       colorIndex = (i + palette.length) % palette.length;
-      cube.material.color.setHex(palette[colorIndex]);
+      cubes.forEach(c => c.mesh.material.color.setHex(palette[colorIndex]));
     }
 
-    // ---- Side color buttons (interactive panels) ------------------------
-    const buttons = [];
-    const buttonGroup = new THREE.Group();
-    scene.add(buttonGroup);
+    function dropBoxes() {
+      cubes.forEach(c => {
+        if (c.dropped) return;
+        c.dropped = true;
+        c.body.type = CANNON.Body.DYNAMIC;
+        c.body.mass = 1;
+        c.body.updateMassProperties();
+        c.body.wakeUp();
+        c.body.angularVelocity.set(
+          (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4
+        );
+      });
+    }
 
+    function addCube() {
+      spawnCube(new THREE.Vector3(
+        -0.6 + Math.random() * 1.2, 1.6 + Math.random() * 0.3, -1.2 + (Math.random() - 0.5) * 0.4
+      ));
+    }
+
+    // First cube
+    spawnCube(new THREE.Vector3(0, 1.5, -1.2));
+
+    // ---- Interactive panels --------------------------------------------
+    const buttons = [];
+
+    // Color swatches stacked on the right
     palette.forEach((hex, i) => {
       const panel = new THREE.Mesh(
         new THREE.BoxGeometry(0.16, 0.16, 0.04),
         new THREE.MeshStandardMaterial({ color: hex, roughness: 0.4, emissive: 0x000000 })
       );
-      // Stack them vertically to the right of the cube
-      panel.position.set(0.55, 1.85 - i * 0.2, -1.2);
+      panel.position.set(0.6, 1.95 - i * 0.2, -1.2);
       panel.userData.colorIndex = i;
-      buttonGroup.add(panel);
+      scene.add(panel);
       buttons.push(panel);
     });
 
-    // ---- Controllers + raycasting --------------------------------------
+    // Text label -> canvas texture
+    function labelTexture(text, bg) {
+      const c = document.createElement('canvas');
+      c.width = 256; c.height = 110;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, c.width, c.height);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 46px system-ui, sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(text, c.width / 2, c.height / 2);
+      const tex = new THREE.CanvasTexture(c);
+      tex.anisotropy = 4;
+      return tex;
+    }
+
+    function actionButton(text, bg, action, y) {
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.34, 0.14, 0.04),
+        new THREE.MeshStandardMaterial({ map: labelTexture(text, bg), roughness: 0.6, emissive: 0x000000 })
+      );
+      mesh.position.set(-0.62, y, -1.2);
+      mesh.userData.action = action;
+      scene.add(mesh);
+      buttons.push(mesh);
+    }
+
+    actionButton('Drop Box', '#cc3344', dropBoxes, 1.6);
+    actionButton('Add Cube', '#3366cc', addCube, 1.4);
+
+    // ---- Controllers, hands, raycasting --------------------------------
     const raycaster = new THREE.Raycaster();
     const tempMatrix = new THREE.Matrix4();
     const controllerModelFactory = new XRControllerModelFactory();
     const handModelFactory = new XRHandModelFactory();
+    const controllers = [];
+
+    function rayFrom(controller) {
+      tempMatrix.identity().extractRotation(controller.matrixWorld);
+      raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+      raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+    }
+
+    function onSelect(controller) {
+      rayFrom(controller);
+      const hits = raycaster.intersectObjects(buttons, false);
+      if (hits.length) {
+        const ud = hits[0].object.userData;
+        if (ud.action) ud.action();
+        else if (ud.colorIndex !== undefined) setColor(ud.colorIndex);
+      } else {
+        setColor(colorIndex + 1); // trigger/pinch in empty space cycles color
+      }
+    }
 
     function buildController(index) {
-      // Target-ray space: fires 'selectstart' for BOTH a controller trigger
-      // pull and a hand pinch, so one handler covers both input modes.
       const controller = renderer.xr.getController(index);
-
-      // Pointer ray line
       const lineGeom = new THREE.BufferGeometry().setFromPoints([
         new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)
       ]);
       const line = new THREE.Line(lineGeom, new THREE.LineBasicMaterial({ color: 0xffffff }));
       line.scale.z = 5;
       controller.add(line);
-
       controller.addEventListener('selectstart', () => onSelect(controller));
-      scene.add(controller);
+      player.add(controller);
 
-      // Controller grip model (shown when holding a Touch controller)
       const grip = renderer.xr.getControllerGrip(index);
       grip.add(controllerModelFactory.createControllerModel(grip));
-      scene.add(grip);
+      player.add(grip);
 
-      // Hand model (shown when using hand tracking instead of controllers)
       const hand = renderer.xr.getHand(index);
       hand.add(handModelFactory.createHandModel(hand, 'mesh'));
-      scene.add(hand);
+      player.add(hand);
 
-      return controller;
+      controllers.push(controller);
     }
 
-    function onSelect(controller) {
-      tempMatrix.identity().extractRotation(controller.matrixWorld);
-      raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-      raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+    buildController(0);
+    buildController(1);
 
-      const hits = raycaster.intersectObjects(buttons, false);
-      if (hits.length > 0) {
-        // Pointed at a panel -> jump to that color
-        setColor(hits[0].object.userData.colorIndex);
-      } else {
-        // Trigger in empty space -> cycle to next color
-        setColor(colorIndex + 1);
-      }
-    }
-
-    const controller0 = buildController(0);
-    const controller1 = buildController(1);
-
-    // Highlight the panel currently being pointed at
     function updateHighlight() {
       buttons.forEach(b => b.material.emissive.setHex(0x000000));
-      for (const controller of [controller0, controller1]) {
-        tempMatrix.identity().extractRotation(controller.matrixWorld);
-        raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-        raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+      for (const controller of controllers) {
+        rayFrom(controller);
         const hits = raycaster.intersectObjects(buttons, false);
-        if (hits.length > 0) hits[0].object.material.emissive.setHex(0x333333);
+        if (hits.length) hits[0].object.material.emissive.setHex(0x333333);
       }
     }
 
-    // ---- Render loop ----------------------------------------------------
+    // ---- Joystick locomotion -------------------------------------------
+    const SPEED = 2.2;          // metres / second
+    const DEAD = 0.2;           // stick deadzone
+    const TURN = Math.PI / 6;   // 30-degree snap turn
+    let canTurn = true;
+    const fwd = new THREE.Vector3(), right = new THREE.Vector3();
+    const headQuat = new THREE.Quaternion(), headPos = new THREE.Vector3();
+
+    function locomotion(dt) {
+      const session = renderer.xr.getSession();
+      if (!session) return;
+
+      for (const src of session.inputSources) {
+        if (!src.gamepad || !src.handedness) continue;
+        const ax = src.gamepad.axes;
+        // Oculus Touch reports the thumbstick on axes[2]/axes[3];
+        // fall back to axes[0]/axes[1] for other devices.
+        const x = ax.length > 2 ? ax[2] : ax[0];
+        const y = ax.length > 3 ? ax[3] : ax[1];
+
+        if (src.handedness === 'left') {
+          if (Math.abs(x) < DEAD && Math.abs(y) < DEAD) continue;
+          camera.getWorldQuaternion(headQuat);
+          fwd.set(0, 0, -1).applyQuaternion(headQuat); fwd.y = 0; fwd.normalize();
+          right.set(1, 0, 0).applyQuaternion(headQuat); right.y = 0; right.normalize();
+          player.position.addScaledVector(fwd, -y * SPEED * dt);
+          player.position.addScaledVector(right, x * SPEED * dt);
+        } else if (src.handedness === 'right') {
+          if (Math.abs(x) < 0.6) { canTurn = true; continue; }
+          if (!canTurn) continue;
+          canTurn = false;
+          const angle = x > 0 ? -TURN : TURN;
+          // rotate the rig about the head so the view pivots in place
+          camera.getWorldPosition(headPos);
+          player.position.sub(headPos);
+          player.position.applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
+          player.position.add(headPos);
+          player.rotateY(angle);
+        }
+      }
+    }
+
+    // ---- Loop -----------------------------------------------------------
+    const clock = new THREE.Clock();
     renderer.setAnimationLoop(() => {
-      cube.rotation.y += 0.01;
-      cube.rotation.x += 0.004;
+      const dt = Math.min(clock.getDelta(), 0.05);
+      locomotion(dt);
+      world.step(1 / 60, dt, 3);
+
+      for (const c of cubes) {
+        if (c.dropped) {
+          c.mesh.position.copy(c.body.position);
+          c.mesh.quaternion.copy(c.body.quaternion);
+        } else {
+          c.mesh.rotation.y += 0.01;
+          c.mesh.rotation.x += 0.004;
+        }
+      }
+
       updateHighlight();
       renderer.render(scene, camera);
     });
 
-    // ---- Register service worker (needed for installable PWA / TWA) -----
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('sw.js').catch(() => {});
     }
