@@ -91,9 +91,10 @@
     const palette = [0xff4444, 0x44cc66, 0x4488ff, 0xffcc33, 0xaa55ff, 0xffffff];
     let colorIndex = 0;
 
-    const SIZE = 0.4, HALF = SIZE / 2;
+    const SIZE = 0.4, HALF = SIZE / 2, RAD = SIZE / 2;
     const boxGeo = new THREE.BoxGeometry(SIZE, SIZE, SIZE);
-    const cubes = []; // { mesh, body, dropped, grabbed }
+    const sphereGeo = new THREE.SphereGeometry(RAD, 32, 24);
+    const cubes = []; // { mesh, body, dropped, grabbed } — holds both cubes and spheres
 
     function spawnCube(pos, colorHex) {
       const mesh = new THREE.Mesh(
@@ -135,10 +136,37 @@
       });
     }
 
-    // Each added cube gets its OWN random color from the palette.
+    function spawnSphere(pos, colorHex) {
+      const mesh = new THREE.Mesh(
+        sphereGeo,
+        new THREE.MeshStandardMaterial({ color: colorHex, roughness: 0.3, metalness: 0.15 })
+      );
+      mesh.position.copy(pos);
+      scene.add(mesh);
+
+      const body = new CANNON.Body({
+        mass: 1,
+        shape: new CANNON.Sphere(RAD),
+        position: new CANNON.Vec3(pos.x, pos.y, pos.z)
+      });
+      body.type = CANNON.Body.STATIC;
+      body.sleep();
+      world.addBody(body);
+
+      cubes.push({ mesh, body, dropped: false, grabbed: false });
+    }
+
+    // Each added cube/sphere gets its OWN random color from the palette.
     function addCube() {
       const hex = palette[Math.floor(Math.random() * palette.length)];
       spawnCube(new THREE.Vector3(
+        -0.6 + Math.random() * 1.2, 1.6 + Math.random() * 0.3, -1.2 + (Math.random() - 0.5) * 0.4
+      ), hex);
+    }
+
+    function addSphere() {
+      const hex = palette[Math.floor(Math.random() * palette.length)];
+      spawnSphere(new THREE.Vector3(
         -0.6 + Math.random() * 1.2, 1.6 + Math.random() * 0.3, -1.2 + (Math.random() - 0.5) * 0.4
       ), hex);
     }
@@ -152,10 +180,12 @@
       cubes.length = 0;
       controllers.forEach(ctrl => (ctrl.userData.grab = null));
       colorIndex = 0;
-      spawnCube(new THREE.Vector3(0, 1.5, -1.2), palette[0]);
+      spawnCube(new THREE.Vector3(-0.3, 1.5, -1.2), palette[0]);
+      spawnSphere(new THREE.Vector3(0.3, 1.5, -1.2), palette[2]);
     }
 
-    spawnCube(new THREE.Vector3(0, 1.5, -1.2), palette[0]); // first cube
+    spawnCube(new THREE.Vector3(-0.3, 1.5, -1.2), palette[0]);   // first cube
+    spawnSphere(new THREE.Vector3(0.3, 1.5, -1.2), palette[2]);  // first sphere
 
     // ---- Interactive panels --------------------------------------------
     const buttons = [];
@@ -196,8 +226,9 @@
       buttons.push(mesh);
     }
 
-    actionButton('Drop Box',    '#cc3344', dropBoxes,  1.72);
-    actionButton('Add Cube',    '#3366cc', addCube,    1.53);
+    actionButton('Drop Box',    '#cc3344', dropBoxes,  1.91);
+    actionButton('Add Cube',    '#3366cc', addCube,    1.72);
+    actionButton('Add Sphere',  '#226644', addSphere,  1.53);
     actionButton('Reset Cubes', '#666a77', resetCubes, 1.34);
 
     // ---- Controllers, hands, raycasting --------------------------------
