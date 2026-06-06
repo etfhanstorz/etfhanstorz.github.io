@@ -12,10 +12,14 @@
       font-family: system-ui, sans-serif; overflow: hidden; }
     #info { position: fixed; top: 12px; left: 0; width: 100%; text-align: center;
       pointer-events: none; font-size: 13px; opacity: .8; }
+    #crosshair { position: fixed; top: 50%; left: 50%; width: 8px; height: 8px;
+      margin: -4px 0 0 -4px; border-radius: 50%; background: rgba(255,255,255,.85);
+      pointer-events: none; display: none; }
   </style>
 </head>
 <body>
-  <div id="info">Enter VR &middot; left stick move &middot; right stick turn &middot; trigger/pinch = buttons &middot; grip = grab a cube</div>
+  <div id="info">VR: Enter VR &middot; sticks move/turn &middot; trigger = buttons &middot; grip = grab. &nbsp;|&nbsp; PC: click to start &middot; WASD + mouse &middot; click = buttons &middot; right-click = grab</div>
+  <div id="crosshair"></div>
 
   <script type="importmap">
   {
@@ -33,6 +37,7 @@
     import { VRButton } from 'three/addons/webxr/VRButton.js';
     import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
     import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
+    import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 
     // ---- Renderer / scene / camera -------------------------------------
     const scene = new THREE.Scene();
@@ -280,10 +285,105 @@
 
     function updateHighlight() {
       buttons.forEach(b => b.material.emissive.setHex(0x000000));
-      for (const controller of controllers) {
-        rayFrom(controller);
+      if (renderer.xr.isPresenting) {
+        for (const controller of controllers) {
+          rayFrom(controller);
+          const hits = raycaster.intersectObjects(buttons, false);
+          if (hits.length) hits[0].object.material.emissive.setHex(0x333333);
+        }
+      } else if (controls.isLocked) {
+        desktopRay();
         const hits = raycaster.intersectObjects(buttons, false);
         if (hits.length) hits[0].object.material.emissive.setHex(0x333333);
+      }
+    }
+
+    // ---- Desktop (PC) controls: mouse-look + WASD + click ---------------
+    // Only active when NOT in a VR session.
+    const controls = new PointerLockControls(camera, renderer.domElement);
+    const crosshair = document.getElementById('crosshair');
+    const keys = {};
+    const screenCenter = new THREE.Vector2(0, 0);
+    let heldCube = null;
+    const desktopThrow = new THREE.Vector3();
+    const camPos = new THREE.Vector3(), camDir = new THREE.Vector3();
+    const targetPos = new THREE.Vector3(), prevHeld = new THREE.Vector3();
+
+    controls.addEventListener('lock',   () => (crosshair.style.display = 'block'));
+    controls.addEventListener('unlock', () => (crosshair.style.display = 'none'));
+
+    addEventListener('keydown', e => (keys[e.code] = true));
+    addEventListener('keyup',   e => (keys[e.code] = false));
+
+    function desktopRay() { raycaster.setFromCamera(screenCenter, camera); }
+
+    function desktopSelect() {
+      desktopRay();
+      const hits = raycaster.intersectObjects(buttons, false);
+      if (hits.length) {
+        const ud = hits[0].object.userData;
+        if (ud.action) ud.action();
+        else if (ud.colorIndex !== undefined) setColorAll(ud.colorIndex);
+      } else {
+        setColorAll(colorIndex + 1);
+      }
+    }
+
+    function desktopGrabStart() {
+      desktopRay();
+      const hits = raycaster.intersectObjects(cubes.map(c => c.mesh), false);
+      if (!hits.length) return;
+      const c = cubes.find(x => x.mesh === hits[0].object);
+      if (!c) return;
+      heldCube = c;
+      c.grabbed = true;
+      c.grabDist = Math.max(0.6, hits[0].distance);
+      c.body.type = CANNON.Body.KINEMATIC;
+      c.body.updateMassProperties();
+      c.body.wakeUp();
+      camera.getWorldPosition(camPos); camera.getWorldDirection(camDir);
+      prevHeld.copy(camPos).addScaledVector(camDir, c.grabDist);
+    }
+
+    function desktopGrabEnd() {
+      if (!heldCube) return;
+      const c = heldCube; heldCube = null;
+      c.grabbed = false; c.dropped = true;
+      c.body.type = CANNON.Body.DYNAMIC;
+      c.body.mass = 1;
+      c.body.updateMassProperties();
+      c.body.wakeUp();
+      c.body.velocity.set(desktopThrow.x, desktopThrow.y, desktopThrow.z);
+    }
+
+    renderer.domElement.addEventListener('click', () => {
+      if (renderer.xr.isPresenting) return;
+      if (!controls.isLocked) controls.lock();
+      else desktopSelect();
+    });
+    renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
+    renderer.domElement.addEventListener('mousedown', e => {
+      if (e.button === 2 && controls.isLocked && !renderer.xr.isPresenting) desktopGrabStart();
+    });
+    addEventListener('mouseup', e => { if (e.button === 2) desktopGrabEnd(); });
+
+    function desktopUpdate(dt) {
+      if (renderer.xr.isPresenting || !controls.isLocked) return;
+      const s = SPEED * dt;
+      if (keys['KeyW'] || keys['ArrowUp'])    controls.moveForward(s);
+      if (keys['KeyS'] || keys['ArrowDown'])  controls.moveForward(-s);
+      if (keys['KeyA'] || keys['ArrowLeft'])  controls.moveRight(-s);
+      if (keys['KeyD'] || keys['ArrowRight']) controls.moveRight(s);
+
+      if (heldCube) {
+        camera.getWorldPosition(camPos); camera.getWorldDirection(camDir);
+        targetPos.copy(camPos).addScaledVector(camDir, heldCube.grabDist);
+        desktopThrow.copy(targetPos).sub(prevHeld).multiplyScalar(1 / Math.max(dt, 1e-3));
+        prevHeld.copy(targetPos);
+        heldCube.body.position.set(targetPos.x, targetPos.y, targetPos.z);
+        heldCube.body.velocity.set(desktopThrow.x, desktopThrow.y, desktopThrow.z);
+        heldCube.body.angularVelocity.set(0, 0, 0);
+        heldCube.mesh.position.copy(targetPos);
       }
     }
 
@@ -350,6 +450,7 @@
       const dt = Math.min(clock.getDelta(), 0.05);
       locomotion(dt);
       updateGrab(dt);
+      desktopUpdate(dt);
 
       world.step(1 / 60, dt, 3);
 
