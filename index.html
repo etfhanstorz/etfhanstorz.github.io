@@ -70,7 +70,7 @@
     <button class="drop-s" onclick="dropSpheres()">Drop Sphere <kbd>G</kbd></button>
     <button class="add-c"  onclick="addCube()">Add Cube <kbd>H</kbd></button>
     <button class="add-s"  onclick="addSphere()">Add Sphere <kbd>J</kbd></button>
-    <button class="reset"  onclick="resetCubes()">Reset</button>
+    <button class="reset"  onclick="resetCubes()">Reset <kbd>K</kbd></button>
     <div class="divider"></div>
     <div class="section-label">Color</div>
     <div id="swatches"></div>
@@ -345,7 +345,8 @@
         case 'KeyF': dropBoxes();   break;
         case 'KeyG': dropSpheres(); break;
         case 'KeyH': addCube();     break;
-        case 'KeyJ': addSphere();   break;
+        case 'KeyJ': addSphere();    break;
+        case 'KeyK': resetCubes();  break;
       }
     });
     addEventListener('keyup', e => (keys[e.code] = false));
