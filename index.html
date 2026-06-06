@@ -58,10 +58,36 @@
     .swatch:hover  { border-color: rgba(255,255,255,.7); }
     .swatch:active { transform: scale(.9); }
     .swatch.active { border-color: #fff; }
+
+    /* Virtual joystick (mobile only) */
+    #joystick-zone {
+      display: none; position: fixed; bottom: 28px; left: 28px;
+      width: 110px; height: 110px; border-radius: 50%;
+      background: rgba(255,255,255,.08); border: 2px solid rgba(255,255,255,.18);
+      touch-action: none; z-index: 20;
+    }
+    #joystick-knob {
+      position: absolute; top: 50%; left: 50%;
+      width: 46px; height: 46px; border-radius: 50%;
+      background: rgba(255,255,255,.35); transform: translate(-50%,-50%);
+      pointer-events: none;
+    }
+    /* Look hint on mobile */
+    #look-hint {
+      display: none; position: fixed; bottom: 34px; right: 24px;
+      font-size: 11px; color: rgba(255,255,255,.35); pointer-events: none;
+    }
+    @media (pointer: coarse) {
+      #joystick-zone { display: block; }
+      #look-hint     { display: block; }
+      #gui kbd       { display: none; } /* hide keybind hints on touch */
+    }
   </style>
 </head>
 <body>
   <div id="crosshair"></div>
+  <div id="joystick-zone"><div id="joystick-knob"></div></div>
+  <div id="look-hint">drag right side to look</div>
 
   <!-- GUI panel — shown in-headset via WebXR DOM overlay -->
   <div id="gui">
@@ -465,6 +491,76 @@
       }
     }
 
+    // ---- Mobile touch controls ------------------------------------------
+    const joyZone  = document.getElementById('joystick-zone');
+    const joyKnob  = document.getElementById('joystick-knob');
+    const JOY_R    = 55; // radius of joystick zone in px
+    let   joyTouch = null, joyDx = 0, joyDy = 0;
+    let   lookTouch = null, lookPrevX = 0, lookPrevY = 0;
+    const LOOK_SENS = 0.003;
+
+    function joyRect() { return joyZone.getBoundingClientRect(); }
+
+    addEventListener('touchstart', e => {
+      if (renderer.xr.isPresenting) return;
+      for (const t of e.changedTouches) {
+        const r = joyRect();
+        const inJoy = t.clientX >= r.left && t.clientX <= r.right &&
+                      t.clientY >= r.top  && t.clientY <= r.bottom;
+        if (inJoy && !joyTouch) {
+          joyTouch = t.identifier;
+        } else if (!lookTouch && !inJoy) {
+          // Only start look if not tapping a GUI element
+          if (!e.target.closest('#gui')) {
+            lookTouch = t.identifier;
+            lookPrevX = t.clientX; lookPrevY = t.clientY;
+          }
+        }
+      }
+    }, { passive: true });
+
+    addEventListener('touchmove', e => {
+      if (renderer.xr.isPresenting) return;
+      for (const t of e.changedTouches) {
+        if (t.identifier === joyTouch) {
+          const r = joyRect();
+          const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+          let dx = t.clientX - cx, dy = t.clientY - cy;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist > JOY_R) { dx *= JOY_R / dist; dy *= JOY_R / dist; }
+          joyDx = dx / JOY_R; joyDy = dy / JOY_R;
+          joyKnob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+        }
+        if (t.identifier === lookTouch) {
+          const dx = t.clientX - lookPrevX, dy = t.clientY - lookPrevY;
+          lookPrevX = t.clientX; lookPrevY = t.clientY;
+          // Rotate player yaw and camera pitch
+          player.rotateY(-dx * LOOK_SENS);
+          camera.rotation.x = Math.max(-Math.PI / 2.2,
+            Math.min(Math.PI / 2.2, camera.rotation.x - dy * LOOK_SENS));
+        }
+      }
+    }, { passive: true });
+
+    addEventListener('touchend', e => {
+      for (const t of e.changedTouches) {
+        if (t.identifier === joyTouch) {
+          joyTouch = null; joyDx = 0; joyDy = 0;
+          joyKnob.style.transform = 'translate(-50%,-50%)';
+        }
+        if (t.identifier === lookTouch) lookTouch = null;
+      }
+    });
+
+    function mobileUpdate(dt) {
+      if (renderer.xr.isPresenting || (joyDx === 0 && joyDy === 0)) return;
+      camera.getWorldQuaternion(headQuat);
+      fwd.set(0, 0, -1).applyQuaternion(headQuat); fwd.y = 0; fwd.normalize();
+      right.set(1, 0, 0).applyQuaternion(headQuat); right.y = 0; right.normalize();
+      player.position.addScaledVector(fwd,  -joyDy * SPEED * dt);
+      player.position.addScaledVector(right,  joyDx * SPEED * dt);
+    }
+
     // ---- Loop -----------------------------------------------------------
     const clock = new THREE.Clock();
     renderer.setAnimationLoop(() => {
@@ -472,6 +568,7 @@
       locomotion(dt);
       updateGrab(dt);
       desktopUpdate(dt);
+      mobileUpdate(dt);
 
       world.step(1 / 60, dt, 3);
 
