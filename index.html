@@ -11,11 +11,11 @@
     html, body { margin: 0; height: 100%; background: #101015; color: #eee;
       font-family: system-ui, sans-serif; overflow: hidden; }
     #info { position: fixed; top: 12px; left: 0; width: 100%; text-align: center;
-      pointer-events: none; font-size: 14px; opacity: .8; }
+      pointer-events: none; font-size: 13px; opacity: .8; }
   </style>
 </head>
 <body>
-  <div id="info">Press <b>Enter VR</b>. Left stick = move, right stick = turn. Point &amp; trigger/pinch the panels.</div>
+  <div id="info">Enter VR &middot; left stick move &middot; right stick turn &middot; trigger/pinch = buttons &middot; grip = grab a cube</div>
 
   <script type="importmap">
   {
@@ -56,8 +56,7 @@
       renderer.setSize(innerWidth, innerHeight);
     });
 
-    // Player rig: everything that should move when you use the joystick
-    // lives under this group (the camera, the controllers and the hands).
+    // Player rig: the joystick moves this, carrying camera + hands + controllers.
     const player = new THREE.Group();
     player.add(camera);
     scene.add(player);
@@ -77,11 +76,28 @@
     // ---- Physics world --------------------------------------------------
     const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) });
     world.broadphase = new CANNON.SAPBroadphase(world);
-    world.defaultContactMaterial.restitution = 0.25; // a little bounce
+    world.defaultContactMaterial.restitution = 0.25;
 
     const floorBody = new CANNON.Body({ type: CANNON.Body.STATIC, shape: new CANNON.Plane() });
     floorBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
     world.addBody(floorBody);
+
+    // Invisible barrier box around the player: four static walls that follow
+    // the head each frame and shove cubes out of your personal space.
+    const walls = [];
+    const R = 0.6; // half-width of the box (≈1.2 m square)
+    function addWall(hx, hy, hz, ox, oz) {
+      const body = new CANNON.Body({
+        type: CANNON.Body.STATIC,
+        shape: new CANNON.Box(new CANNON.Vec3(hx, hy, hz))
+      });
+      world.addBody(body);
+      walls.push({ body, ox, oz });
+    }
+    addWall(R, 1, 0.05, 0, -R);  // front
+    addWall(R, 1, 0.05, 0,  R);  // back
+    addWall(0.05, 1, R,  R, 0);  // right
+    addWall(0.05, 1, R, -R, 0);  // left
 
     // ---- Cubes ----------------------------------------------------------
     const palette = [0xff4444, 0x44cc66, 0x4488ff, 0xffcc33, 0xaa55ff, 0xffffff];
@@ -89,12 +105,12 @@
 
     const SIZE = 0.4, HALF = SIZE / 2;
     const boxGeo = new THREE.BoxGeometry(SIZE, SIZE, SIZE);
-    const cubes = []; // { mesh, body, dropped }
+    const cubes = []; // { mesh, body, dropped, grabbed }
 
-    function spawnCube(pos) {
+    function spawnCube(pos, colorHex) {
       const mesh = new THREE.Mesh(
         boxGeo,
-        new THREE.MeshStandardMaterial({ color: palette[colorIndex], roughness: 0.35, metalness: 0.1 })
+        new THREE.MeshStandardMaterial({ color: colorHex, roughness: 0.35, metalness: 0.1 })
       );
       mesh.position.copy(pos);
       scene.add(mesh);
@@ -104,21 +120,22 @@
         shape: new CANNON.Box(new CANNON.Vec3(HALF, HALF, HALF)),
         position: new CANNON.Vec3(pos.x, pos.y, pos.z)
       });
-      body.type = CANNON.Body.STATIC; // frozen / floating until dropped
+      body.type = CANNON.Body.STATIC; // floats until dropped or grabbed
       body.sleep();
       world.addBody(body);
 
-      cubes.push({ mesh, body, dropped: false });
+      cubes.push({ mesh, body, dropped: false, grabbed: false });
     }
 
-    function setColor(i) {
+    // Color swatch = GLOBAL: repaint every cube the same color.
+    function setColorAll(i) {
       colorIndex = (i + palette.length) % palette.length;
       cubes.forEach(c => c.mesh.material.color.setHex(palette[colorIndex]));
     }
 
     function dropBoxes() {
       cubes.forEach(c => {
-        if (c.dropped) return;
+        if (c.dropped || c.grabbed) return;
         c.dropped = true;
         c.body.type = CANNON.Body.DYNAMIC;
         c.body.mass = 1;
@@ -130,38 +147,49 @@
       });
     }
 
+    // Each added cube gets its OWN random color from the palette.
     function addCube() {
+      const hex = palette[Math.floor(Math.random() * palette.length)];
       spawnCube(new THREE.Vector3(
         -0.6 + Math.random() * 1.2, 1.6 + Math.random() * 0.3, -1.2 + (Math.random() - 0.5) * 0.4
-      ));
+      ), hex);
     }
 
-    // First cube
-    spawnCube(new THREE.Vector3(0, 1.5, -1.2));
+    function resetCubes() {
+      for (const c of cubes) {
+        scene.remove(c.mesh);
+        c.mesh.material.dispose();
+        world.removeBody(c.body);
+      }
+      cubes.length = 0;
+      controllers.forEach(ctrl => (ctrl.userData.grab = null));
+      colorIndex = 0;
+      spawnCube(new THREE.Vector3(0, 1.5, -1.2), palette[0]);
+    }
+
+    spawnCube(new THREE.Vector3(0, 1.5, -1.2), palette[0]); // first cube
 
     // ---- Interactive panels --------------------------------------------
     const buttons = [];
 
-    // Color swatches stacked on the right
     palette.forEach((hex, i) => {
       const panel = new THREE.Mesh(
         new THREE.BoxGeometry(0.16, 0.16, 0.04),
         new THREE.MeshStandardMaterial({ color: hex, roughness: 0.4, emissive: 0x000000 })
       );
-      panel.position.set(0.6, 1.95 - i * 0.2, -1.2);
+      panel.position.set(0.62, 2.0 - i * 0.19, -1.2);
       panel.userData.colorIndex = i;
       scene.add(panel);
       buttons.push(panel);
     });
 
-    // Text label -> canvas texture
     function labelTexture(text, bg) {
       const c = document.createElement('canvas');
       c.width = 256; c.height = 110;
       const ctx = c.getContext('2d');
       ctx.fillStyle = bg; ctx.fillRect(0, 0, c.width, c.height);
       ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 46px system-ui, sans-serif';
+      ctx.font = 'bold 44px system-ui, sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(text, c.width / 2, c.height / 2);
       const tex = new THREE.CanvasTexture(c);
@@ -171,7 +199,7 @@
 
     function actionButton(text, bg, action, y) {
       const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(0.34, 0.14, 0.04),
+        new THREE.BoxGeometry(0.34, 0.13, 0.04),
         new THREE.MeshStandardMaterial({ map: labelTexture(text, bg), roughness: 0.6, emissive: 0x000000 })
       );
       mesh.position.set(-0.62, y, -1.2);
@@ -180,8 +208,9 @@
       buttons.push(mesh);
     }
 
-    actionButton('Drop Box', '#cc3344', dropBoxes, 1.6);
-    actionButton('Add Cube', '#3366cc', addCube, 1.4);
+    actionButton('Drop Box',    '#cc3344', dropBoxes,  1.72);
+    actionButton('Add Cube',    '#3366cc', addCube,    1.53);
+    actionButton('Reset Cubes', '#666a77', resetCubes, 1.34);
 
     // ---- Controllers, hands, raycasting --------------------------------
     const raycaster = new THREE.Raycaster();
@@ -189,6 +218,7 @@
     const controllerModelFactory = new XRControllerModelFactory();
     const handModelFactory = new XRHandModelFactory();
     const controllers = [];
+    const GRAB_R = 0.28; // how close the controller must be to grab a cube
 
     function rayFrom(controller) {
       tempMatrix.identity().extractRotation(controller.matrixWorld);
@@ -202,10 +232,40 @@
       if (hits.length) {
         const ud = hits[0].object.userData;
         if (ud.action) ud.action();
-        else if (ud.colorIndex !== undefined) setColor(ud.colorIndex);
+        else if (ud.colorIndex !== undefined) setColorAll(ud.colorIndex);
       } else {
-        setColor(colorIndex + 1); // trigger/pinch in empty space cycles color
+        setColorAll(colorIndex + 1); // trigger/pinch in empty space cycles all
       }
+    }
+
+    const _cp = new THREE.Vector3();
+    function onGrabStart(controller) {
+      controller.getWorldPosition(_cp);
+      let best = null, bestD = GRAB_R;
+      for (const c of cubes) {
+        const d = c.mesh.position.distanceTo(_cp);
+        if (d < bestD) { bestD = d; best = c; }
+      }
+      if (!best) return;
+      controller.userData.grab = best;
+      best.grabbed = true;
+      best.body.type = CANNON.Body.KINEMATIC;
+      best.body.updateMassProperties();
+      best.body.wakeUp();
+    }
+
+    function onGrabEnd(controller) {
+      const c = controller.userData.grab;
+      if (!c) return;
+      controller.userData.grab = null;
+      c.grabbed = false;
+      c.dropped = true;
+      c.body.type = CANNON.Body.DYNAMIC;
+      c.body.mass = 1;
+      c.body.updateMassProperties();
+      c.body.wakeUp();
+      const v = controller.userData.vel || new THREE.Vector3();
+      c.body.velocity.set(v.x, v.y, v.z); // throw it
     }
 
     function buildController(index) {
@@ -217,6 +277,8 @@
       line.scale.z = 5;
       controller.add(line);
       controller.addEventListener('selectstart', () => onSelect(controller));
+      controller.addEventListener('squeezestart', () => onGrabStart(controller));
+      controller.addEventListener('squeezeend', () => onGrabEnd(controller));
       player.add(controller);
 
       const grip = renderer.xr.getControllerGrip(index);
@@ -243,9 +305,7 @@
     }
 
     // ---- Joystick locomotion -------------------------------------------
-    const SPEED = 2.2;          // metres / second
-    const DEAD = 0.2;           // stick deadzone
-    const TURN = Math.PI / 6;   // 30-degree snap turn
+    const SPEED = 2.2, DEAD = 0.2, TURN = Math.PI / 6;
     let canTurn = true;
     const fwd = new THREE.Vector3(), right = new THREE.Vector3();
     const headQuat = new THREE.Quaternion(), headPos = new THREE.Vector3();
@@ -253,12 +313,9 @@
     function locomotion(dt) {
       const session = renderer.xr.getSession();
       if (!session) return;
-
       for (const src of session.inputSources) {
         if (!src.gamepad || !src.handedness) continue;
         const ax = src.gamepad.axes;
-        // Oculus Touch reports the thumbstick on axes[2]/axes[3];
-        // fall back to axes[0]/axes[1] for other devices.
         const x = ax.length > 2 ? ax[2] : ax[0];
         const y = ax.length > 3 ? ax[3] : ax[1];
 
@@ -274,7 +331,6 @@
           if (!canTurn) continue;
           canTurn = false;
           const angle = x > 0 ? -TURN : TURN;
-          // rotate the rig about the head so the view pivots in place
           camera.getWorldPosition(headPos);
           player.position.sub(headPos);
           player.position.applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
@@ -284,14 +340,42 @@
       }
     }
 
+    // ---- Grab tracking: move held cubes + measure throw velocity --------
+    function updateGrab(dt) {
+      for (const controller of controllers) {
+        controller.getWorldPosition(_cp);
+        const prev = controller.userData.prev;
+        if (prev) {
+          controller.userData.vel = _cp.clone().sub(prev).multiplyScalar(1 / Math.max(dt, 1e-3));
+        }
+        controller.userData.prev = _cp.clone();
+
+        const c = controller.userData.grab;
+        if (c) {
+          c.body.position.set(_cp.x, _cp.y, _cp.z);
+          const v = controller.userData.vel || new THREE.Vector3();
+          c.body.velocity.set(v.x, v.y, v.z); // so it pushes other cubes while held
+          c.body.angularVelocity.set(0, 0, 0);
+          c.mesh.position.copy(_cp);
+        }
+      }
+    }
+
     // ---- Loop -----------------------------------------------------------
     const clock = new THREE.Clock();
     renderer.setAnimationLoop(() => {
       const dt = Math.min(clock.getDelta(), 0.05);
       locomotion(dt);
+      updateGrab(dt);
+
+      // Keep the barrier box centered on the player's head.
+      camera.getWorldPosition(headPos);
+      for (const w of walls) w.body.position.set(headPos.x + w.ox, 1, headPos.z + w.oz);
+
       world.step(1 / 60, dt, 3);
 
       for (const c of cubes) {
+        if (c.grabbed) continue;           // position set in updateGrab
         if (c.dropped) {
           c.mesh.position.copy(c.body.position);
           c.mesh.quaternion.copy(c.body.quaternion);
