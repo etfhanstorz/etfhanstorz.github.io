@@ -30,6 +30,7 @@
     import * as THREE from 'three';
     import { VRButton } from 'three/addons/webxr/VRButton.js';
     import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+    import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
 
     // ---- Scene setup ----------------------------------------------------
     const scene = new THREE.Scene();
@@ -43,7 +44,9 @@
     renderer.setSize(innerWidth, innerHeight);
     renderer.xr.enabled = true;
     document.body.appendChild(renderer.domElement);
-    document.body.appendChild(VRButton.createButton(renderer));
+    document.body.appendChild(VRButton.createButton(renderer, {
+      optionalFeatures: ['hand-tracking', 'local-floor', 'bounded-floor']
+    }));
 
     addEventListener('resize', () => {
       camera.aspect = innerWidth / innerHeight;
@@ -101,8 +104,11 @@
     const raycaster = new THREE.Raycaster();
     const tempMatrix = new THREE.Matrix4();
     const controllerModelFactory = new XRControllerModelFactory();
+    const handModelFactory = new XRHandModelFactory();
 
     function buildController(index) {
+      // Target-ray space: fires 'selectstart' for BOTH a controller trigger
+      // pull and a hand pinch, so one handler covers both input modes.
       const controller = renderer.xr.getController(index);
 
       // Pointer ray line
@@ -116,9 +122,15 @@
       controller.addEventListener('selectstart', () => onSelect(controller));
       scene.add(controller);
 
+      // Controller grip model (shown when holding a Touch controller)
       const grip = renderer.xr.getControllerGrip(index);
       grip.add(controllerModelFactory.createControllerModel(grip));
       scene.add(grip);
+
+      // Hand model (shown when using hand tracking instead of controllers)
+      const hand = renderer.xr.getHand(index);
+      hand.add(handModelFactory.createHandModel(hand, 'mesh'));
+      scene.add(hand);
 
       return controller;
     }
