@@ -66,10 +66,10 @@
   <!-- GUI panel — shown in-headset via WebXR DOM overlay -->
   <div id="gui">
     <div class="section-label">Actions</div>
-    <button class="drop"   onclick="dropBoxes()">Drop Box <kbd>D</kbd></button>
-    <button class="drop-s" onclick="dropSpheres()">Drop Sphere <kbd>F</kbd></button>
-    <button class="add-c"  onclick="addCube()">Add Cube <kbd>G</kbd></button>
-    <button class="add-s"  onclick="addSphere()">Add Sphere <kbd>H</kbd></button>
+    <button class="drop"   onclick="dropBoxes()">Drop Box <kbd>F</kbd></button>
+    <button class="drop-s" onclick="dropSpheres()">Drop Sphere <kbd>G</kbd></button>
+    <button class="add-c"  onclick="addCube()">Add Cube <kbd>H</kbd></button>
+    <button class="add-s"  onclick="addSphere()">Add Sphere <kbd>J</kbd></button>
     <button class="reset"  onclick="resetCubes()">Reset</button>
     <div class="divider"></div>
     <div class="section-label">Color</div>
@@ -342,10 +342,10 @@
       keys[e.code] = true;
       if (e.target.tagName === 'BUTTON') return; // don't fire when clicking GUI
       switch (e.code) {
-        case 'KeyD': dropBoxes();   break;
-        case 'KeyF': dropSpheres(); break;
-        case 'KeyG': addCube();     break;
-        case 'KeyH': addSphere();   break;
+        case 'KeyF': dropBoxes();   break;
+        case 'KeyG': dropSpheres(); break;
+        case 'KeyH': addCube();     break;
+        case 'KeyJ': addSphere();   break;
       }
     });
     addEventListener('keyup', e => (keys[e.code] = false));
