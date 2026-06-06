@@ -8,18 +8,67 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icons/icon-192.png" />
   <style>
+    *, *::before, *::after { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; background: #101015; color: #eee;
       font-family: system-ui, sans-serif; overflow: hidden; }
-    #info { position: fixed; top: 12px; left: 0; width: 100%; text-align: center;
-      pointer-events: none; font-size: 13px; opacity: .8; }
+
     #crosshair { position: fixed; top: 50%; left: 50%; width: 8px; height: 8px;
       margin: -4px 0 0 -4px; border-radius: 50%; background: rgba(255,255,255,.85);
       pointer-events: none; display: none; }
+
+    /* GUI panel */
+    #gui {
+      position: fixed; top: 50%; left: 16px; transform: translateY(-50%);
+      display: flex; flex-direction: column; gap: 8px;
+      background: rgba(10,10,16,.75); backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,.12); border-radius: 14px;
+      padding: 12px 10px; z-index: 10; user-select: none;
+    }
+    #gui .section-label {
+      font-size: 10px; font-weight: 700; letter-spacing: .08em;
+      text-transform: uppercase; color: rgba(255,255,255,.4);
+      text-align: center; margin-bottom: 2px;
+    }
+    #gui .divider { height: 1px; background: rgba(255,255,255,.1); margin: 2px 0; }
+
+    /* Action buttons */
+    #gui button {
+      all: unset; cursor: pointer; display: block; width: 100%;
+      padding: 9px 14px; border-radius: 9px; font-size: 13px; font-weight: 600;
+      text-align: center; color: #fff; transition: filter .1s, transform .1s;
+    }
+    #gui button:hover  { filter: brightness(1.25); }
+    #gui button:active { transform: scale(.95); }
+    #gui button.drop   { background: #c0303f; }
+    #gui button.add-c  { background: #2f5fbe; }
+    #gui button.add-s  { background: #1f7a52; }
+    #gui button.reset  { background: #444658; }
+
+    /* Color swatches */
+    #swatches { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .swatch {
+      width: 34px; height: 34px; border-radius: 7px; cursor: pointer;
+      border: 2px solid transparent; transition: border-color .15s, transform .1s;
+    }
+    .swatch:hover  { border-color: rgba(255,255,255,.7); }
+    .swatch:active { transform: scale(.9); }
+    .swatch.active { border-color: #fff; }
   </style>
 </head>
 <body>
-  <div id="info">VR: Enter VR &middot; sticks move/turn &middot; trigger = buttons &middot; grip = grab. &nbsp;|&nbsp; PC: click to start &middot; WASD + mouse &middot; click = buttons &middot; right-click = grab</div>
   <div id="crosshair"></div>
+
+  <!-- GUI panel — shown in-headset via WebXR DOM overlay -->
+  <div id="gui">
+    <div class="section-label">Actions</div>
+    <button class="drop"  onclick="dropBoxes()">Drop Box</button>
+    <button class="add-c" onclick="addCube()">Add Cube</button>
+    <button class="add-s" onclick="addSphere()">Add Sphere</button>
+    <button class="reset" onclick="resetCubes()">Reset</button>
+    <div class="divider"></div>
+    <div class="section-label">Color</div>
+    <div id="swatches"></div>
+  </div>
 
   <script type="importmap">
   {
@@ -52,7 +101,8 @@
     renderer.xr.enabled = true;
     document.body.appendChild(renderer.domElement);
     document.body.appendChild(VRButton.createButton(renderer, {
-      optionalFeatures: ['hand-tracking', 'local-floor', 'bounded-floor']
+      optionalFeatures: ['hand-tracking', 'local-floor', 'bounded-floor'],
+      domOverlay: { root: document.getElementById('gui') }
     }));
 
     addEventListener('resize', () => {
@@ -120,6 +170,7 @@
     function setColorAll(i) {
       colorIndex = (i + palette.length) % palette.length;
       cubes.forEach(c => c.mesh.material.color.setHex(palette[colorIndex]));
+      swatchEls.forEach((el, j) => el.classList.toggle('active', j === colorIndex));
     }
 
     function dropBoxes() {
@@ -187,75 +238,28 @@
     spawnCube(new THREE.Vector3(-0.3, 1.5, -1.2), palette[0]);   // first cube
     spawnSphere(new THREE.Vector3(0.3, 1.5, -1.2), palette[2]);  // first sphere
 
-    // ---- Interactive panels --------------------------------------------
-    const buttons = [];
-
+    // ---- HTML GUI swatches ---------------------------------------------
+    const swatchEls = [];
+    const swatchContainer = document.getElementById('swatches');
     palette.forEach((hex, i) => {
-      const panel = new THREE.Mesh(
-        new THREE.BoxGeometry(0.16, 0.16, 0.04),
-        new THREE.MeshStandardMaterial({ color: hex, roughness: 0.4, emissive: 0x000000 })
-      );
-      panel.position.set(0.62, 2.0 - i * 0.19, -1.2);
-      panel.userData.colorIndex = i;
-      scene.add(panel);
-      buttons.push(panel);
+      const el = document.createElement('div');
+      el.className = 'swatch' + (i === 0 ? ' active' : '');
+      el.style.background = '#' + hex.toString(16).padStart(6, '0');
+      el.addEventListener('click', () => setColorAll(i));
+      swatchContainer.appendChild(el);
+      swatchEls.push(el);
     });
 
-    function labelTexture(text, bg) {
-      const c = document.createElement('canvas');
-      c.width = 256; c.height = 110;
-      const ctx = c.getContext('2d');
-      ctx.fillStyle = bg; ctx.fillRect(0, 0, c.width, c.height);
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 44px system-ui, sans-serif';
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(text, c.width / 2, c.height / 2);
-      const tex = new THREE.CanvasTexture(c);
-      tex.anisotropy = 4;
-      return tex;
-    }
+    // expose actions to HTML onclick attributes
+    Object.assign(window, { dropBoxes, addCube, addSphere, resetCubes });
 
-    function actionButton(text, bg, action, y) {
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(0.34, 0.13, 0.04),
-        new THREE.MeshStandardMaterial({ map: labelTexture(text, bg), roughness: 0.6, emissive: 0x000000 })
-      );
-      mesh.position.set(-0.62, y, -1.2);
-      mesh.userData.action = action;
-      scene.add(mesh);
-      buttons.push(mesh);
-    }
-
-    actionButton('Drop Box',    '#cc3344', dropBoxes,  1.91);
-    actionButton('Add Cube',    '#3366cc', addCube,    1.72);
-    actionButton('Add Sphere',  '#226644', addSphere,  1.53);
-    actionButton('Reset Cubes', '#666a77', resetCubes, 1.34);
-
-    // ---- Controllers, hands, raycasting --------------------------------
+    // ---- Controllers, hands, grab ---------------------------------------
     const raycaster = new THREE.Raycaster();
     const tempMatrix = new THREE.Matrix4();
     const controllerModelFactory = new XRControllerModelFactory();
     const handModelFactory = new XRHandModelFactory();
     const controllers = [];
-    const GRAB_R = 0.28; // how close the controller must be to grab a cube
-
-    function rayFrom(controller) {
-      tempMatrix.identity().extractRotation(controller.matrixWorld);
-      raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-      raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
-    }
-
-    function onSelect(controller) {
-      rayFrom(controller);
-      const hits = raycaster.intersectObjects(buttons, false);
-      if (hits.length) {
-        const ud = hits[0].object.userData;
-        if (ud.action) ud.action();
-        else if (ud.colorIndex !== undefined) setColorAll(ud.colorIndex);
-      } else {
-        setColorAll(colorIndex + 1); // trigger/pinch in empty space cycles all
-      }
-    }
+    const GRAB_R = 0.28;
 
     const _cp = new THREE.Vector3();
     function onGrabStart(controller) {
@@ -284,7 +288,7 @@
       c.body.updateMassProperties();
       c.body.wakeUp();
       const v = controller.userData.vel || new THREE.Vector3();
-      c.body.velocity.set(v.x, v.y, v.z); // throw it
+      c.body.velocity.set(v.x, v.y, v.z);
     }
 
     function buildController(index) {
@@ -292,12 +296,11 @@
       const lineGeom = new THREE.BufferGeometry().setFromPoints([
         new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)
       ]);
-      const line = new THREE.Line(lineGeom, new THREE.LineBasicMaterial({ color: 0xffffff }));
-      line.scale.z = 5;
+      const line = new THREE.Line(lineGeom, new THREE.LineBasicMaterial({ color: 0xffffff, opacity: 0.5, transparent: true }));
+      line.scale.z = 4;
       controller.add(line);
-      controller.addEventListener('selectstart', () => onSelect(controller));
       controller.addEventListener('squeezestart', () => onGrabStart(controller));
-      controller.addEventListener('squeezeend', () => onGrabEnd(controller));
+      controller.addEventListener('squeezeend',   () => onGrabEnd(controller));
       player.add(controller);
 
       const grip = renderer.xr.getControllerGrip(index);
@@ -314,23 +317,7 @@
     buildController(0);
     buildController(1);
 
-    function updateHighlight() {
-      buttons.forEach(b => b.material.emissive.setHex(0x000000));
-      if (renderer.xr.isPresenting) {
-        for (const controller of controllers) {
-          rayFrom(controller);
-          const hits = raycaster.intersectObjects(buttons, false);
-          if (hits.length) hits[0].object.material.emissive.setHex(0x333333);
-        }
-      } else if (controls.isLocked) {
-        desktopRay();
-        const hits = raycaster.intersectObjects(buttons, false);
-        if (hits.length) hits[0].object.material.emissive.setHex(0x333333);
-      }
-    }
-
-    // ---- Desktop (PC) controls: mouse-look + WASD + click ---------------
-    // Only active when NOT in a VR session.
+    // ---- Desktop (PC) controls: mouse-look + WASD + right-click grab ----
     const controls = new PointerLockControls(camera, renderer.domElement);
     const crosshair = document.getElementById('crosshair');
     const keys = {};
@@ -346,22 +333,8 @@
     addEventListener('keydown', e => (keys[e.code] = true));
     addEventListener('keyup',   e => (keys[e.code] = false));
 
-    function desktopRay() { raycaster.setFromCamera(screenCenter, camera); }
-
-    function desktopSelect() {
-      desktopRay();
-      const hits = raycaster.intersectObjects(buttons, false);
-      if (hits.length) {
-        const ud = hits[0].object.userData;
-        if (ud.action) ud.action();
-        else if (ud.colorIndex !== undefined) setColorAll(ud.colorIndex);
-      } else {
-        setColorAll(colorIndex + 1);
-      }
-    }
-
     function desktopGrabStart() {
-      desktopRay();
+      raycaster.setFromCamera(screenCenter, camera);
       const hits = raycaster.intersectObjects(cubes.map(c => c.mesh), false);
       if (!hits.length) return;
       const c = cubes.find(x => x.mesh === hits[0].object);
@@ -390,7 +363,6 @@
     renderer.domElement.addEventListener('click', () => {
       if (renderer.xr.isPresenting) return;
       if (!controls.isLocked) controls.lock();
-      else desktopSelect();
     });
     renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
     renderer.domElement.addEventListener('mousedown', e => {
@@ -496,7 +468,6 @@
         }
       }
 
-      updateHighlight();
       renderer.render(scene, camera);
     });
 
