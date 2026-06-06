@@ -82,23 +82,6 @@
     floorBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
     world.addBody(floorBody);
 
-    // Invisible barrier box around the player: four static walls that follow
-    // the head each frame and shove cubes out of your personal space.
-    const walls = [];
-    const R = 0.6; // half-width of the box (≈1.2 m square)
-    function addWall(hx, hy, hz, ox, oz) {
-      const body = new CANNON.Body({
-        type: CANNON.Body.STATIC,
-        shape: new CANNON.Box(new CANNON.Vec3(hx, hy, hz))
-      });
-      world.addBody(body);
-      walls.push({ body, ox, oz });
-    }
-    addWall(R, 1, 0.05, 0, -R);  // front
-    addWall(R, 1, 0.05, 0,  R);  // back
-    addWall(0.05, 1, R,  R, 0);  // right
-    addWall(0.05, 1, R, -R, 0);  // left
-
     // ---- Cubes ----------------------------------------------------------
     const palette = [0xff4444, 0x44cc66, 0x4488ff, 0xffcc33, 0xaa55ff, 0xffffff];
     let colorIndex = 0;
@@ -367,10 +350,6 @@
       const dt = Math.min(clock.getDelta(), 0.05);
       locomotion(dt);
       updateGrab(dt);
-
-      // Keep the barrier box centered on the player's head.
-      camera.getWorldPosition(headPos);
-      for (const w of walls) w.body.position.set(headPos.x + w.ox, 1, headPos.z + w.oz);
 
       world.step(1 / 60, dt, 3);
 
